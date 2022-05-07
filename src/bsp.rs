@@ -14,6 +14,74 @@ pub struct Dw1000 {
     gpiote: Gpiote,
 }
 
+pub mod async_spi {
+    use crate::hal::{
+        pac::SPIM0,
+        spim::{DmaTransfer, Spim},
+    };
+    use core::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, Waker},
+    };
+    use heapless::spsc::{Consumer, Producer, Queue};
+
+    enum SpiOrTransfer {
+        Spi(Spim<SPIM0>),
+        Transfer(DmaTransfer<SPIM0, &'static mut [u8]>),
+    }
+
+    /// Storage for the queue to the async SPI
+    pub struct AsyncSpiStorage {
+        spi_queue: Queue<Waker, 8>,
+    }
+
+    impl AsyncSpiStorage {
+        pub fn split(&mut self, spi: Spim<SPIM0>) -> (AsyncSpiHandle, AsyncSpiBackend) {
+            let (p, c) = self.spi_queue.split();
+
+            (
+                AsyncSpiHandle { p },
+                AsyncSpiBackend {
+                    spi: SpiOrTransfer::Spi(spi),
+                    waiting: c,
+                },
+            )
+        }
+    }
+
+    /// Used by SPIM interrupt to do transfers.
+    pub struct AsyncSpiBackend<'a> {
+        spi: SpiOrTransfer,
+        waiting: Consumer<'a, Waker, 8>,
+    }
+
+    /// Used by drivers to access SPI.
+    ///
+    /// TODO: How to get results from backend?
+    pub struct AsyncSpiHandle<'a> {
+        p: Producer<'a, Waker, 8>,
+    }
+
+    impl<'a> AsyncSpiHandle<'a> {
+        fn transfer<'s>(&'s mut self, buf: &'static mut [u8]) -> AsyncSpiFuture<'s, 'a> {
+            AsyncSpiFuture { buf, aspi: self }
+        }
+    }
+
+    pub struct AsyncSpiFuture<'a, 'b> {
+        buf: &'static mut [u8],
+        aspi: &'a mut AsyncSpiHandle<'b>,
+    }
+
+    impl Future for AsyncSpiFuture<'_, '_> {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+            todo!()
+        }
+    }
+}
 #[inline(always)]
 pub fn init(_c: cortex_m::Peripherals, p: pac::Peripherals) -> (MonoRtc<RTC0>, Dw1000) {
     let _clocks = Clocks::new(p.CLOCK)
