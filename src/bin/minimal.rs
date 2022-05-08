@@ -37,18 +37,31 @@ mod app {
     }
 
     #[local]
-    struct Local {}
+    struct Local {
+        async_spi_backend: async_spi::Backend,
+        async_spi_handle: async_spi::Handle,
+    }
 
-    #[init]
+    use bsp::async_spi;
+
+    #[init(local = [aspi_storage: async_spi::Storage = async_spi::Storage::new()])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("init");
 
-        let (mono, dw1000) = bsp::init(cx.core, cx.device);
+        let (mono, dw1000, aspi_handle, aspi_backend) =
+            bsp::init(cx.core, cx.device, cx.local.aspi_storage);
 
         task1::spawn().ok();
         task_executor::spawn().ok();
 
-        (Shared { s: 0, dw1000 }, Local {}, init::Monotonics(mono))
+        (
+            Shared { s: 0, dw1000 },
+            Local {
+                async_spi_backend: aspi_backend,
+                async_spi_handle: aspi_handle,
+            },
+            init::Monotonics(mono),
+        )
     }
 
     #[idle]
@@ -58,9 +71,9 @@ mod app {
         loop {}
     }
 
-    #[task(binds = SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0, priority = 8)]
+    #[task(binds = SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0, priority = 8, local = [async_spi_backend])]
     fn spim_task(cx: spim_task::Context) {
-        // TODO ...
+        cx.local.async_spi_backend.spim_interrupt();
     }
 
     #[task]
@@ -107,7 +120,7 @@ mod app {
     // TODO: This should be a special case codegen for the `dispatcher`, which runs
     //       in the dispatcher. Not as its own task, this is just to make it work
     //       in this example.
-    #[task(shared = [s, dw1000])]
+    #[task(shared = [s, dw1000], local = [async_spi_handle])]
     fn task_executor(cx: task_executor::Context) {
         let task_storage = unsafe { &mut TASK };
         match task_storage {
