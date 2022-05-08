@@ -22,7 +22,8 @@ defmt::timestamp!("{}", {
 mod app {
     use super::*;
     use dwm1001_async::{bsp, hal, rtc_monotonic::*};
-    use hal::pac::RTC0;
+    use hal::pac::{RTC0, SPIM0};
+    use hal::prelude::*;
 
     #[monotonic(binds = RTC0, default = true)]
     type Mono = MonoRtc<RTC0>;
@@ -33,13 +34,13 @@ mod app {
     #[shared]
     struct Shared {
         s: u32,
-        dw1000: bsp::Dw1000,
     }
 
     #[local]
     struct Local {
-        async_spi_backend: async_spi::Backend,
-        async_spi_handle: async_spi::Handle,
+        async_spi_backend: async_spi::Backend<SPIM0>,
+        async_spi_handle: async_spi::Handle<SPIM0>,
+        dw1000: bsp::Dw1000,
     }
 
     use bsp::async_spi;
@@ -55,10 +56,11 @@ mod app {
         task_executor::spawn().ok();
 
         (
-            Shared { s: 0, dw1000 },
+            Shared { s: 0 },
             Local {
                 async_spi_backend: aspi_backend,
                 async_spi_handle: aspi_handle,
+                dw1000,
             },
             init::Monotonics(mono),
         )
@@ -87,28 +89,45 @@ mod app {
     // TODO: This should be the task, that is understood by the `syntax` proc-macro
     // #[task(priority = 2)]
     async fn task(cx: task_executor::Context<'_>) {
+        static mut BUF: [u8; 5] = [0; 5];
         #[allow(unused_imports)]
         use rtic::mutex_prelude::*;
 
-        defmt::info!("delay long time");
+        // defmt::info!("delay long time");
 
-        let fut = Delay::spawn(1234.millis());
+        loop {
+            Delay::spawn(1234.millis()).await;
 
-        defmt::info!("we have just created the future");
-        fut.await;
-        defmt::info!("long delay done");
+            defmt::info!("do SPI!!!");
 
-        defmt::info!("delay short time");
-        sleep(500.millis()).await;
-        defmt::info!("short delay done");
+            cx.local.dw1000.cs.set_low().ok();
 
-        defmt::info!("test timeout");
-        let res = timeout(NeverEndingFuture {}, 1.secs()).await;
-        defmt::info!("timeout done: {:?}", res);
+            unsafe {
+                BUF = [0; 5];
+            }
 
-        defmt::info!("test timeout 2");
-        let res = timeout(Delay::spawn(500.millis()), 1.secs()).await;
-        defmt::info!("timeout done 2: {:?}", res);
+            let r = unsafe { cx.local.async_spi_handle.transfer(&mut BUF).await };
+
+            defmt::info!("SPI done! Res: {:x}", r);
+
+            cx.local.dw1000.cs.set_high().ok();
+        }
+
+        // defmt::info!("we have just created the future");
+        // fut.await;
+        // defmt::info!("long delay done");
+
+        // defmt::info!("delay short time");
+        // sleep(500.millis()).await;
+        // defmt::info!("short delay done");
+
+        // defmt::info!("test timeout");
+        // let res = timeout(NeverEndingFuture {}, 1.secs()).await;
+        // defmt::info!("timeout done: {:?}", res);
+
+        // defmt::info!("test timeout 2");
+        // let res = timeout(Delay::spawn(500.millis()), 1.secs()).await;
+        // defmt::info!("timeout done 2: {:?}", res);
     }
 
     //////////////////////////////////////////////
@@ -120,7 +139,7 @@ mod app {
     // TODO: This should be a special case codegen for the `dispatcher`, which runs
     //       in the dispatcher. Not as its own task, this is just to make it work
     //       in this example.
-    #[task(shared = [s, dw1000], local = [async_spi_handle])]
+    #[task(shared = [s], local = [async_spi_handle, dw1000])]
     fn task_executor(cx: task_executor::Context) {
         let task_storage = unsafe { &mut TASK };
         match task_storage {
