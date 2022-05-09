@@ -15,7 +15,8 @@ fugit = { version = "0.3.2", features = ["defmt"] }
 nrf52832-hal = { git = "https://github.com/korken89/nrf-hal.git", branch = "dma-spim" }
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 rtic-monotonic = "1"
-heapless = "0.7.10"
+# heapless = "0.7.10"
+critical-section = "0.2.7"
 
 # cargo build/run
 [profile.dev]

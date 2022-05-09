@@ -14,49 +14,83 @@ pub struct Dw1000 {
 }
 
 pub mod ssq {
-    use core::{cell::UnsafeCell, task::Waker};
+    use core::{cell::UnsafeCell, ptr};
 
-    pub struct Ssq {
-        val: UnsafeCell<Option<Waker>>,
+    /// Single slot queue.
+    pub struct Ssq<T> {
+        val: UnsafeCell<Option<T>>,
     }
 
-    impl Ssq {
+    impl<T> Ssq<T> {
         pub const fn new() -> Self {
             Ssq {
                 val: UnsafeCell::new(None),
             }
         }
 
-        pub fn split<'a>(&'a mut self) -> (Read<'a>, Write<'a>) {
+        pub fn split<'a>(&'a mut self) -> (Read<'a, T>, Write<'a, T>) {
             (Read { val: &self.val }, Write { val: &self.val })
         }
     }
 
-    pub struct Read<'a> {
-        val: &'a UnsafeCell<Option<Waker>>,
+    /// Read handle to a single sided queue. It internally uses a critical section that blocks
+    /// for the duration of moving the val out of the storage.
+    pub struct Read<'a, T> {
+        val: &'a UnsafeCell<Option<T>>,
     }
 
-    impl<'a> Read<'a> {
-        // ...
+    impl<'a, T> Read<'a, T> {
+        /// Try reading a value from the queue.
+        #[inline]
+        pub fn read(&mut self) -> Option<T> {
+            critical_section::with(|_| unsafe { ptr::replace(self.val.get(), None) })
+        }
+
+        /// Check if there is a value in the queue.
+        #[inline]
+        pub fn is_empty(&self) -> bool {
+            critical_section::with(|_| unsafe { &*self.val.get() }.is_none())
+        }
     }
 
-    pub struct Write<'a> {
-        val: &'a UnsafeCell<Option<Waker>>,
+    /// Safety: We gurarantee the safety using a critical section to read the `UnsafeCell`.
+    unsafe impl<'a, T> Send for Read<'a, T> {}
+
+    /// Write handle to a single sided queue. It internally uses a critical section that blocks
+    /// for the duration of moving the old value out of the storage and writing the new value in.
+    pub struct Write<'a, T> {
+        val: &'a UnsafeCell<Option<T>>,
     }
 
-    impl<'a> Write<'a> {
-        // ...
+    impl<'a, T> Write<'a, T> {
+        /// Write a value into the queue. If there is a value already in the queue this will
+        /// overwrite it and run `drop` on the old value.
+        #[inline]
+        pub fn write(&mut self, val: T) {
+            // Not a `ptr::write` so the desctructor of `T` will run if it is overwritten.
+            let r = critical_section::with(|_| unsafe { ptr::replace(self.val.get(), Some(val)) });
+            drop(r);
+        }
+
+        /// Check if there is a value in the queue.
+        #[inline]
+        pub fn is_empty(&self) -> bool {
+            critical_section::with(|_| unsafe { &*self.val.get() }.is_none())
+        }
     }
+
+    /// Safety: We gurarantee the safety using a critical section to read the `UnsafeCell`.
+    unsafe impl<'a, T> Send for Write<'a, T> {}
 }
 
 pub mod async_spi {
+    use super::ssq;
     use crate::hal::spim::{DmaTransfer, Spim};
     use core::{
         future::Future,
         pin::Pin,
         task::{Context, Poll, Waker},
     };
-    use heapless::spsc::{Consumer, Producer, Queue};
     use nrf52832_hal::spim::{Instance, SpimEvent};
 
     /// Aync SPI state.
@@ -71,29 +105,29 @@ pub mod async_spi {
 
     /// Storage for the queue to the async SPI's wakers, place this in 'static storage.
     pub struct Storage {
-        waker_queue: Queue<Waker, 2>,
+        waker_queue: ssq::Ssq<Waker>,
     }
 
     impl Storage {
         /// Create a new storage.
         pub const fn new() -> Self {
             Storage {
-                waker_queue: Queue::new(),
+                waker_queue: ssq::Ssq::new(),
             }
         }
 
         /// Takes the a reference to static storage and a SPI and give the Async SPI handle and
         /// backend.
         pub fn split<T: Instance>(&'static mut self, spi: Spim<T>) -> (Handle<T>, Backend<T>) {
-            let (p, c) = self.waker_queue.split();
+            let (r, w) = self.waker_queue.split();
 
             (
                 Handle {
-                    send_waker: p,
+                    send_waker: w,
                     state: SpiOrTransfer::Spi(spi),
                 },
                 Backend {
-                    waiting: c,
+                    waiting: r,
                     _t: core::marker::PhantomData,
                 },
             )
@@ -102,7 +136,7 @@ pub mod async_spi {
 
     /// Handles the DMA's end interrupt and wakes up the waiting wakers.
     pub struct Backend<T: Instance> {
-        waiting: Consumer<'static, Waker, 2>,
+        waiting: ssq::Read<'static, Waker>,
         _t: core::marker::PhantomData<T>,
     }
 
@@ -119,7 +153,7 @@ pub mod async_spi {
 
             // Wake all wakers on interrupt.
             // TODO: Should do something smarter
-            while let Some(waker) = self.waiting.dequeue() {
+            if let Some(waker) = self.waiting.read() {
                 defmt::trace!("    spim_interrupt: Waking a waker");
                 waker.wake();
             }
@@ -128,7 +162,7 @@ pub mod async_spi {
 
     /// Used by drivers to access SPI, registers wakers to the DMA interrupt backend.
     pub struct Handle<T: Instance> {
-        send_waker: Producer<'static, Waker, 2>,
+        send_waker: ssq::Write<'static, Waker>,
         state: SpiOrTransfer<T>,
     }
 
@@ -167,7 +201,7 @@ pub mod async_spi {
 
                     // Enqueue a waker so we get run again on the next event
                     defmt::trace!("    TransferFuture: Enqueueing waker...");
-                    s.aspi.send_waker.enqueue(cx.waker().clone()).ok();
+                    s.aspi.send_waker.write(cx.waker().clone());
 
                     // Start transfer.
                     let transfer = spi.dma_transfer(s.buf.take().unwrap_or_else(|| unreachable!()));
@@ -189,7 +223,7 @@ pub mod async_spi {
 
                     // Enqueue a waker so we get run again on the next event
                     defmt::trace!("    TransferFuture: Enqueueing waker...");
-                    s.aspi.send_waker.enqueue(cx.waker().clone()).ok();
+                    s.aspi.send_waker.write(cx.waker().clone());
 
                     // Transfer not done, place it back into the state
                     s.aspi.state = SpiOrTransfer::Transfer(transfer);
