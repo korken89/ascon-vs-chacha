@@ -18,14 +18,14 @@ pub mod ssq {
     use core::{cell::UnsafeCell, mem::MaybeUninit, ptr};
 
     /// Single slot queue.
-    pub struct Ssq<T> {
+    pub struct SingleSlotQueue<T> {
         full: AtomicBool,
         val: UnsafeCell<MaybeUninit<T>>,
     }
 
-    impl<T> Ssq<T> {
+    impl<T> SingleSlotQueue<T> {
         pub const fn new() -> Self {
-            Ssq {
+            SingleSlotQueue {
                 full: AtomicBool::new(false),
                 val: UnsafeCell::new(MaybeUninit::uninit()),
             }
@@ -36,7 +36,7 @@ pub mod ssq {
         }
     }
 
-    impl<T> Drop for Ssq<T> {
+    impl<T> Drop for SingleSlotQueue<T> {
         fn drop(&mut self) {
             if self.full.load(Ordering::Relaxed) {
                 unsafe {
@@ -48,7 +48,7 @@ pub mod ssq {
 
     /// Read handle to a single slot queue.
     pub struct Read<'a, T> {
-        ssq: &'a Ssq<T>,
+        ssq: &'a SingleSlotQueue<T>,
     }
 
     impl<'a, T> Read<'a, T> {
@@ -76,7 +76,7 @@ pub mod ssq {
 
     /// Write handle to a single slot queue.
     pub struct Write<'a, T> {
-        ssq: &'a Ssq<T>,
+        ssq: &'a SingleSlotQueue<T>,
     }
 
     impl<'a, T> Write<'a, T> {
@@ -127,14 +127,14 @@ pub mod async_spi {
 
     /// Storage for the queue to the async SPI's wakers, place this in 'static storage.
     pub struct Storage {
-        waker_queue: ssq::Ssq<Waker>,
+        waker_queue: ssq::SingleSlotQueue<Waker>,
     }
 
     impl Storage {
         /// Create a new storage.
         pub const fn new() -> Self {
             Storage {
-                waker_queue: ssq::Ssq::new(),
+                waker_queue: ssq::SingleSlotQueue::new(),
             }
         }
 
