@@ -46,8 +46,7 @@ pub mod ssq {
         }
     }
 
-    /// Read handle to a single slot queue. It internally uses a critical section that blocks
-    /// for the duration of moving the val out of the storage.
+    /// Read handle to a single slot queue.
     pub struct Read<'a, T> {
         ssq: &'a Ssq<T>,
     }
@@ -72,11 +71,10 @@ pub mod ssq {
         }
     }
 
-    /// Safety: We gurarantee the safety using a critical section to read the `UnsafeCell`.
+    /// Safety: We gurarantee the safety using an `AtomicBool` to gate the read of the `UnsafeCell`.
     unsafe impl<'a, T> Send for Read<'a, T> {}
 
-    /// Write handle to a single slot queue. It internally uses a critical section that blocks
-    /// for the duration of moving the old value out of the storage and writing the new value in.
+    /// Write handle to a single slot queue.
     pub struct Write<'a, T> {
         ssq: &'a Ssq<T>,
     }
@@ -102,7 +100,8 @@ pub mod ssq {
         }
     }
 
-    /// Safety: We gurarantee the safety using a critical section to read the `UnsafeCell`.
+    /// Safety: We gurarantee the safety using an `AtomicBool` to gate the write of the
+    /// `UnsafeCell`.
     unsafe impl<'a, T> Send for Write<'a, T> {}
 }
 
