@@ -31,8 +31,8 @@ pub mod ssq {
             }
         }
 
-        pub fn split<'a>(&'a mut self) -> (Read<'a, T>, Write<'a, T>) {
-            (Read { ssq: self }, Write { ssq: self })
+        pub fn split<'a>(&'a mut self) -> (Consumer<'a, T>, Producer<'a, T>) {
+            (Consumer { ssq: self }, Producer { ssq: self })
         }
     }
 
@@ -47,14 +47,14 @@ pub mod ssq {
     }
 
     /// Read handle to a single slot queue.
-    pub struct Read<'a, T> {
+    pub struct Consumer<'a, T> {
         ssq: &'a SingleSlotQueue<T>,
     }
 
-    impl<'a, T> Read<'a, T> {
+    impl<'a, T> Consumer<'a, T> {
         /// Try reading a value from the queue.
         #[inline]
-        pub fn read(&mut self) -> Option<T> {
+        pub fn dequeue(&mut self) -> Option<T> {
             if self.ssq.full.load(Ordering::Acquire) {
                 let r = Some(unsafe { ptr::read(self.ssq.val.get().cast()) });
                 self.ssq.full.store(false, Ordering::Release);
@@ -72,18 +72,18 @@ pub mod ssq {
     }
 
     /// Safety: We gurarantee the safety using an `AtomicBool` to gate the read of the `UnsafeCell`.
-    unsafe impl<'a, T> Send for Read<'a, T> {}
+    unsafe impl<'a, T> Send for Consumer<'a, T> {}
 
     /// Write handle to a single slot queue.
-    pub struct Write<'a, T> {
+    pub struct Producer<'a, T> {
         ssq: &'a SingleSlotQueue<T>,
     }
 
-    impl<'a, T> Write<'a, T> {
+    impl<'a, T> Producer<'a, T> {
         /// Write a value into the queue. If there is a value already in the queue this will
         /// return the value given to this method.
         #[inline]
-        pub fn write(&mut self, val: T) -> Option<T> {
+        pub fn enqueue(&mut self, val: T) -> Option<T> {
             if !self.ssq.full.load(Ordering::Acquire) {
                 unsafe { ptr::write(self.ssq.val.get().cast(), val) };
                 self.ssq.full.store(true, Ordering::Release);
@@ -102,7 +102,7 @@ pub mod ssq {
 
     /// Safety: We gurarantee the safety using an `AtomicBool` to gate the write of the
     /// `UnsafeCell`.
-    unsafe impl<'a, T> Send for Write<'a, T> {}
+    unsafe impl<'a, T> Send for Producer<'a, T> {}
 }
 
 pub mod async_spi {
@@ -158,7 +158,7 @@ pub mod async_spi {
 
     /// Handles the DMA's end interrupt and wakes up the waiting wakers.
     pub struct Backend<T: Instance> {
-        waiting: ssq::Read<'static, Waker>,
+        waiting: ssq::Consumer<'static, Waker>,
         _t: core::marker::PhantomData<T>,
     }
 
@@ -175,7 +175,7 @@ pub mod async_spi {
 
             // Wake all wakers on interrupt.
             // TODO: Should do something smarter
-            if let Some(waker) = self.waiting.read() {
+            if let Some(waker) = self.waiting.dequeue() {
                 defmt::trace!("    spim_interrupt: Waking a waker");
                 waker.wake();
             }
@@ -184,7 +184,7 @@ pub mod async_spi {
 
     /// Used by drivers to access SPI, registers wakers to the DMA interrupt backend.
     pub struct Handle<T: Instance> {
-        send_waker: ssq::Write<'static, Waker>,
+        send_waker: ssq::Producer<'static, Waker>,
         state: SpiOrTransfer<T>,
     }
 
@@ -223,7 +223,7 @@ pub mod async_spi {
 
                     // Enqueue a waker so we get run again on the next event
                     defmt::trace!("    TransferFuture: Enqueueing waker...");
-                    s.aspi.send_waker.write(cx.waker().clone());
+                    s.aspi.send_waker.enqueue(cx.waker().clone());
 
                     // Start transfer.
                     let transfer = spi.dma_transfer(s.buf.take().unwrap_or_else(|| unreachable!()));
@@ -245,7 +245,7 @@ pub mod async_spi {
 
                     // Enqueue a waker so we get run again on the next event
                     defmt::trace!("    TransferFuture: Enqueueing waker...");
-                    s.aspi.send_waker.write(cx.waker().clone());
+                    s.aspi.send_waker.enqueue(cx.waker().clone());
 
                     // Transfer not done, place it back into the state
                     s.aspi.state = SpiOrTransfer::Transfer(transfer);
