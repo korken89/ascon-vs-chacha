@@ -53,7 +53,9 @@ mod app {
             bsp::init(cx.core, cx.device, cx.local.aspi_storage);
 
         task1::spawn().ok();
-        task_executor::spawn().ok();
+
+        // task_executor::spawn().ok();
+        rtic::pend(hal::pac::Interrupt::SWI2_EGU2);
 
         (
             Shared { s: 0 },
@@ -139,7 +141,7 @@ mod app {
     // TODO: This should be a special case codegen for the `dispatcher`, which runs
     //       in the dispatcher. Not as its own task, this is just to make it work
     //       in this example.
-    #[task(shared = [s], local = [async_spi_handle, dw1000])]
+    #[task(binds = SWI2_EGU2, shared = [s], local = [async_spi_handle, dw1000])]
     fn task_executor(cx: task_executor::Context) {
         let task_storage = unsafe { &mut TASK };
         match task_storage {
@@ -150,12 +152,12 @@ mod app {
                 // TODO: Check if there is some way to not need 'static lifetime
                 defmt::trace!("    task_executor spawn");
                 task_storage.spawn(|| task(unsafe { mem::transmute(cx) }));
-                task_executor::spawn().ok();
+                rtic::pend(hal::pac::Interrupt::SWI2_EGU2);
             }
             _ => {
                 defmt::trace!("    task_executor run");
                 task_storage.poll(|| {
-                    task_executor::spawn().ok();
+                    rtic::pend(hal::pac::Interrupt::SWI2_EGU2);
                 });
             }
         };

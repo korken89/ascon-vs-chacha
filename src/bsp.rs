@@ -87,9 +87,7 @@ pub mod ssq {
         #[inline]
         pub fn write(&mut self, val: T) -> Option<T> {
             if !self.ssq.full.load(Ordering::Acquire) {
-                unsafe {
-                    ptr::write(self.ssq.val.get().cast(), val);
-                }
+                unsafe { ptr::write(self.ssq.val.get().cast(), val) };
                 self.ssq.full.store(true, Ordering::Release);
                 None
             } else {
