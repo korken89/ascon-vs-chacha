@@ -14,68 +14,93 @@ pub struct Dw1000 {
 }
 
 pub mod ssq {
-    use core::{cell::UnsafeCell, ptr};
+    use atomic_polyfill::{AtomicBool, Ordering};
+    use core::{cell::UnsafeCell, mem::MaybeUninit, ptr};
 
     /// Single slot queue.
     pub struct Ssq<T> {
-        val: UnsafeCell<Option<T>>,
+        full: AtomicBool,
+        val: UnsafeCell<MaybeUninit<T>>,
     }
 
     impl<T> Ssq<T> {
         pub const fn new() -> Self {
             Ssq {
-                val: UnsafeCell::new(None),
+                full: AtomicBool::new(false),
+                val: UnsafeCell::new(MaybeUninit::uninit()),
             }
         }
 
         pub fn split<'a>(&'a mut self) -> (Read<'a, T>, Write<'a, T>) {
-            (Read { val: &self.val }, Write { val: &self.val })
+            (Read { ssq: self }, Write { ssq: self })
         }
     }
 
-    /// Read handle to a single sided queue. It internally uses a critical section that blocks
+    impl<T> Drop for Ssq<T> {
+        fn drop(&mut self) {
+            if self.full.load(Ordering::Relaxed) {
+                unsafe {
+                    ptr::drop_in_place(self.val.get() as *mut T);
+                }
+            }
+        }
+    }
+
+    /// Read handle to a single slot queue. It internally uses a critical section that blocks
     /// for the duration of moving the val out of the storage.
     pub struct Read<'a, T> {
-        val: &'a UnsafeCell<Option<T>>,
+        ssq: &'a Ssq<T>,
     }
 
     impl<'a, T> Read<'a, T> {
         /// Try reading a value from the queue.
         #[inline]
         pub fn read(&mut self) -> Option<T> {
-            critical_section::with(|_| unsafe { ptr::replace(self.val.get(), None) })
+            if self.ssq.full.load(Ordering::Acquire) {
+                let r = Some(unsafe { ptr::read(self.ssq.val.get().cast()) });
+                self.ssq.full.store(false, Ordering::Release);
+                r
+            } else {
+                None
+            }
         }
 
         /// Check if there is a value in the queue.
         #[inline]
         pub fn is_empty(&self) -> bool {
-            critical_section::with(|_| unsafe { &*self.val.get() }.is_none())
+            !self.ssq.full.load(Ordering::Relaxed)
         }
     }
 
     /// Safety: We gurarantee the safety using a critical section to read the `UnsafeCell`.
     unsafe impl<'a, T> Send for Read<'a, T> {}
 
-    /// Write handle to a single sided queue. It internally uses a critical section that blocks
+    /// Write handle to a single slot queue. It internally uses a critical section that blocks
     /// for the duration of moving the old value out of the storage and writing the new value in.
     pub struct Write<'a, T> {
-        val: &'a UnsafeCell<Option<T>>,
+        ssq: &'a Ssq<T>,
     }
 
     impl<'a, T> Write<'a, T> {
         /// Write a value into the queue. If there is a value already in the queue this will
-        /// overwrite it and run `drop` on the old value.
+        /// return the value given to this method.
         #[inline]
-        pub fn write(&mut self, val: T) {
-            // Not a `ptr::write` so the desctructor of `T` will run if it is overwritten.
-            let r = critical_section::with(|_| unsafe { ptr::replace(self.val.get(), Some(val)) });
-            drop(r);
+        pub fn write(&mut self, val: T) -> Option<T> {
+            if !self.ssq.full.load(Ordering::Acquire) {
+                unsafe {
+                    ptr::write(self.ssq.val.get().cast(), val);
+                }
+                self.ssq.full.store(true, Ordering::Release);
+                None
+            } else {
+                Some(val)
+            }
         }
 
         /// Check if there is a value in the queue.
         #[inline]
         pub fn is_empty(&self) -> bool {
-            critical_section::with(|_| unsafe { &*self.val.get() }.is_none())
+            !self.ssq.full.load(Ordering::Relaxed)
         }
     }
 
