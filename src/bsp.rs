@@ -243,9 +243,11 @@ pub mod async_spi {
 
                     defmt::trace!("    TransferFuture: Transfer not done...");
 
-                    // Enqueue a waker so we get run again on the next event
+                    // Enqueue a waker and enable the interrupt again so we get run again on the
+                    // next event
                     defmt::trace!("    TransferFuture: Enqueueing waker...");
                     s.aspi.send_waker.enqueue(cx.waker().clone());
+                    unsafe { &*T::ptr() }.intenset.write(|w| w.end().set_bit());
 
                     // Transfer not done, place it back into the state
                     s.aspi.state = SpiOrTransfer::Transfer(transfer);
