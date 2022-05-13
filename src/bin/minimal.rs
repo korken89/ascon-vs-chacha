@@ -1,7 +1,6 @@
 #![no_main]
 #![no_std]
 #![feature(type_alias_impl_trait)]
-
 use dwm1001_async as _; // global logger + panicking-behavior + memory layout
 
 use core::{
@@ -21,7 +20,7 @@ defmt::timestamp!("{}", {
 #[rtic::app(device = dwm1001_async::hal::pac, dispatchers = [SWI0_EGU0, SWI1_EGU1])]
 mod app {
     use super::*;
-    use dwm1001_async::{bsp, hal, rtc_monotonic::*};
+    use dwm1001_async::{async_spi, bsp, hal, rtc_monotonic::*};
     use hal::pac::{RTC0, SPIM0};
     use hal::prelude::*;
 
@@ -42,8 +41,6 @@ mod app {
         async_spi_handle: async_spi::Handle<SPIM0>,
         dw1000: bsp::Dw1000,
     }
-
-    use bsp::async_spi;
 
     #[init(local = [aspi_storage: async_spi::Storage = async_spi::Storage::new()])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
