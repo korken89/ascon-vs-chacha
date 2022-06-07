@@ -88,7 +88,6 @@ mod app {
     // TODO: This should be the task, that is understood by the `syntax` proc-macro
     // #[task(priority = 2)]
     async fn task(cx: task_executor::Context<'_>) {
-        static mut BUF: [u8; 5] = [0; 5];
         #[allow(unused_imports)]
         use rtic::mutex_prelude::*;
 
@@ -101,11 +100,9 @@ mod app {
 
             cx.local.dw1000.cs.set_low().ok();
 
-            unsafe {
-                BUF = [0; 5];
-            }
+            let mut buf = [0; 5];
 
-            let r = unsafe { cx.local.async_spi_handle.transfer(&mut BUF).await };
+            let r = cx.local.async_spi_handle.transfer(&mut buf).await;
 
             defmt::info!("SPI done! Res: {:x}", r);
 
@@ -148,7 +145,7 @@ mod app {
                 //
                 // TODO: Check if there is some way to not need 'static lifetime
                 defmt::trace!("    task_executor spawn");
-                task_storage.spawn(|| task(unsafe { mem::transmute(cx) }));
+                task_storage.spawn(task(unsafe { mem::transmute(cx) }));
                 rtic::pend(hal::pac::Interrupt::SWI2_EGU2);
             }
             _ => {
@@ -206,8 +203,8 @@ impl<F: Future + 'static> AsyncTaskExecutor<F> {
         Self::Idle
     }
 
-    fn spawn(&mut self, future: impl FnOnce() -> F) {
-        *self = AsyncTaskExecutor::Running(future());
+    fn spawn(&mut self, future: F) {
+        *self = AsyncTaskExecutor::Running(future);
     }
 
     fn poll(&mut self, wake: fn()) {

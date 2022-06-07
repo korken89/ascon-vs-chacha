@@ -4,6 +4,7 @@ use crate::{
 };
 use core::{
     future::Future,
+    marker::PhantomData,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -16,8 +17,10 @@ enum SpiOrTransfer<T: Instance> {
     /// SPI idle.
     Spi(Spim<T>),
     /// SPI in active DMA transfer.
-    Transfer(DmaTransfer<T, &'static mut [u8]>),
+    Transfer(DmaTransfer<T, DmaSlice>),
 }
+
+unsafe impl<T: Instance> Send for SpiOrTransfer<T> {}
 
 /// Storage for the queue to the async SPI's wakers, place this in 'static storage.
 pub struct Storage {
@@ -44,7 +47,7 @@ impl Storage {
             },
             Backend {
                 waiting: r,
-                _t: core::marker::PhantomData,
+                _t: PhantomData,
             },
         )
     }
@@ -53,7 +56,7 @@ impl Storage {
 /// Handles the DMA's end interrupt and wakes up the waiting wakers.
 pub struct Backend<T: Instance> {
     waiting: ssq::Consumer<'static, Waker>,
-    _t: core::marker::PhantomData<T>,
+    _t: PhantomData<T>,
 }
 
 impl<T: Instance> Backend<T> {
@@ -84,23 +87,62 @@ pub struct Handle<T: Instance> {
 
 impl<T: Instance> Handle<T> {
     /// Perform an SPI transfer.
-    pub fn transfer<'s>(&'s mut self, buf: &'static mut [u8]) -> TransferFuture<'s, T> {
+    pub fn transfer<'s>(&'s mut self, buf: &'s mut [u8]) -> TransferFuture<'s, T> {
         defmt::trace!("    Handle: Creating TransferFuture...");
         TransferFuture {
-            buf: Some(buf),
+            buf: unsafe { DmaSlice::from_slice(buf) },
             aspi: self,
         }
     }
 }
 
+struct DmaSlice {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl Default for DmaSlice {
+    fn default() -> Self {
+        Self {
+            ptr: core::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl DmaSlice {
+    /// Take a slice and generate an DmaSlice for `async` usage.
+    ///
+    /// Safety: This is only safe to use within an async future.
+    pub unsafe fn from_slice(buf: &mut [u8]) -> Self {
+        Self {
+            ptr: buf.as_mut_ptr(),
+            len: buf.len(),
+        }
+    }
+
+    /// Take a DmaSlice for `async` usage and give back the underlying buffer
+    pub fn to_slice<'a>(self) -> &'a mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+unsafe impl embedded_dma::WriteBuffer for DmaSlice {
+    type Word = u8;
+
+    unsafe fn write_buffer(&mut self) -> (*mut Self::Word, usize) {
+        (self.ptr, self.len)
+    }
+}
+
 /// Handles the `async` part of the SPI DMA transfer
 pub struct TransferFuture<'a, T: Instance> {
-    buf: Option<&'static mut [u8]>,
+    buf: DmaSlice,
     aspi: &'a mut Handle<T>,
 }
 
-impl<T: Instance> Future for TransferFuture<'_, T> {
-    type Output = &'static mut [u8];
+impl<'a, T: Instance> Future for TransferFuture<'a, T> {
+    type Output = &'a mut [u8];
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let s = unsafe { self.get_unchecked_mut() };
@@ -120,7 +162,7 @@ impl<T: Instance> Future for TransferFuture<'_, T> {
                 s.aspi.send_waker.enqueue(cx.waker().clone());
 
                 // Start transfer.
-                let transfer = spi.dma_transfer(s.buf.take().unwrap_or_else(|| unreachable!()));
+                let transfer = spi.dma_transfer(core::mem::take(&mut s.buf));
                 s.aspi.state = SpiOrTransfer::Transfer(transfer);
                 defmt::trace!("    TransferFuture: Starting transfer...");
             }
@@ -132,7 +174,7 @@ impl<T: Instance> Future for TransferFuture<'_, T> {
 
                     defmt::trace!("    TransferFuture: Transfer done!");
 
-                    return Poll::Ready(buf);
+                    return Poll::Ready(buf.to_slice::<'a>());
                 }
 
                 defmt::trace!("    TransferFuture: Transfer not done...");

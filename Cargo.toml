@@ -16,6 +16,7 @@ nrf52832-hal = { git = "https://github.com/korken89/nrf-hal.git", branch = "dma-
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 rtic-monotonic = "1"
 atomic-polyfill = "0.1.8"
+embedded-dma = "0.2"
 
 # cargo build/run
 [profile.dev]
