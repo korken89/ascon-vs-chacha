@@ -10,6 +10,10 @@ use core::{
 };
 use nrf52832_hal::spim::{Instance, SpimEvent};
 
+pub type WakerQueue = ssq::SingleSlotQueue<Waker>;
+pub type WakerProducer<'a> = ssq::Producer<'a, Waker>;
+pub type WakerConsumer<'a> = ssq::Consumer<'a, Waker>;
+
 /// Aync SPI state.
 enum SpiOrTransfer<T: Instance> {
     /// Used when moving between the two states.
@@ -20,18 +24,31 @@ enum SpiOrTransfer<T: Instance> {
     Transfer(DmaTransfer<T, DmaSlice>),
 }
 
+// impl<T: Instance> Drop for SpiOrTransfer<T> {
+//     fn drop(&mut self) {
+//         match self {
+//             SpiOrTransfer::Transfer(_transfer) => {
+//                 panic!("ops, this is not implemented");
+//                 // The HAL does not support aborting a transfer yet, need adding
+//                 // transfer.abort();
+//             }
+//             _ => {}
+//         }
+//     }
+// }
+
 unsafe impl<T: Instance> Send for SpiOrTransfer<T> {}
 
 /// Storage for the queue to the async SPI's wakers, place this in 'static storage.
 pub struct Storage {
-    waker_queue: ssq::SingleSlotQueue<Waker>,
+    waker_queue: WakerQueue,
 }
 
 impl Storage {
     /// Create a new storage.
     pub const fn new() -> Self {
         Storage {
-            waker_queue: ssq::SingleSlotQueue::new(),
+            waker_queue: WakerQueue::new(),
         }
     }
 
@@ -55,7 +72,7 @@ impl Storage {
 
 /// Handles the DMA's end interrupt and wakes up the waiting wakers.
 pub struct Backend<T: Instance> {
-    waiting: ssq::Consumer<'static, Waker>,
+    waiting: WakerConsumer<'static>,
     _t: PhantomData<T>,
 }
 
@@ -81,7 +98,7 @@ impl<T: Instance> Backend<T> {
 
 /// Used by drivers to access SPI, registers wakers to the DMA interrupt backend.
 pub struct Handle<T: Instance> {
-    send_waker: ssq::Producer<'static, Waker>,
+    send_waker: WakerProducer<'static>,
     state: SpiOrTransfer<T>,
 }
 
