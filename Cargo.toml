@@ -13,7 +13,7 @@ defmt-rtt = "0.3.2"
 fugit = { version = "0.3.2", features = ["defmt"] }
 nrf52832-hal = { git = "https://github.com/korken89/nrf-hal.git", branch = "dma-spim" }
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
-panic-reset = "0.1.1"
+#panic-reset = "0.1.1"
 rtic-monotonic = "1"
 atomic-polyfill = "0.1.8"
 embedded-dma = "0.2"

@@ -27,7 +27,6 @@ mod app {
 
     #[local]
     struct Local {
-        async_spi_backend: async_spi::Backend<SPIM0>,
         async_spi_handle: async_spi::Handle<SPIM0>,
         dw1000: bsp::Dw1000,
     }
@@ -36,25 +35,18 @@ mod app {
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("init");
 
-        let (mono, dw1000, aspi_handle, aspi_backend) =
-            bsp::init(cx.core, cx.device, cx.local.aspi_storage);
+        let (mono, dw1000, aspi_handle) = bsp::init(cx.core, cx.device, cx.local.aspi_storage);
 
         async_task::spawn().ok();
 
         (
             Shared {},
             Local {
-                async_spi_backend: aspi_backend,
                 async_spi_handle: aspi_handle,
                 dw1000,
             },
             init::Monotonics(mono),
         )
-    }
-
-    #[task(binds = SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0, priority = 2, local = [async_spi_backend])]
-    fn spim_task(cx: spim_task::Context) {
-        cx.local.async_spi_backend.spim_interrupt();
     }
 
     #[task(local = [async_spi_handle, dw1000])]

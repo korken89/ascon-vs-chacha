@@ -21,12 +21,7 @@ pub fn init(
     _c: cortex_m::Peripherals,
     p: pac::Peripherals,
     aspi_storage: &'static mut async_spi::Storage,
-) -> (
-    MonoRtc<RTC0>,
-    Dw1000,
-    async_spi::Handle<SPIM0>,
-    async_spi::Backend<SPIM0>,
-) {
+) -> (MonoRtc<RTC0>, Dw1000, async_spi::Handle<SPIM0>) {
     let _clocks = Clocks::new(p.CLOCK)
         .enable_ext_hfosc()
         .set_lfclk_src_external(LfOscConfiguration::NoExternalNoBypass)
@@ -73,7 +68,7 @@ pub fn init(
 
     defmt::info!("DEV_ID: {:x}", buf);
 
-    let (handle, backend) = aspi_storage.split(spi);
+    let handle = aspi_storage.split(spi);
 
     let gpiote = Gpiote::new(p.GPIOTE);
 
@@ -91,10 +86,5 @@ pub fn init(
         .hi_to_lo()
         .enable_interrupt();
 
-    (
-        MonoRtc::new(p.RTC0),
-        Dw1000 { cs, rst, gpiote },
-        handle,
-        backend,
-    )
+    (MonoRtc::new(p.RTC0), Dw1000 { cs, rst, gpiote }, handle)
 }

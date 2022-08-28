@@ -1,6 +1,6 @@
 use crate::{
     hal::spim::{DmaTransfer, Spim},
-    ssq,
+    ssq::{self, Consumer},
 };
 use core::{
     future::Future,
@@ -11,7 +11,10 @@ use core::{
 use embedded_hal_async::spi::{
     Error, ErrorKind, ErrorType, SpiBus, SpiBusFlush, SpiBusRead, SpiBusWrite,
 };
-use nrf52832_hal::spim::{Instance, SpimEvent};
+use nrf52832_hal::{
+    pac::SPIM0,
+    spim::{Instance, SpimEvent},
+};
 
 pub type WakerQueue = ssq::SingleSlotQueue<Waker>;
 pub type WakerProducer<'a> = ssq::Producer<'a, Waker>;
@@ -57,19 +60,44 @@ impl Storage {
 
     /// Takes the a reference to static storage and a SPI and give the Async SPI handle and
     /// backend.
-    pub fn split<T: Instance>(&'static mut self, spi: Spim<T>) -> (Handle<T>, Backend<T>) {
+    pub fn split<T: Instance>(&'static mut self, spi: Spim<T>) -> Handle<T> {
         let (r, w) = self.waker_queue.split();
 
-        (
-            Handle {
-                send_waker: w,
-                state: SpiOrTransfer::Spi(spi),
-            },
-            Backend {
-                waiting: r,
-                _t: PhantomData,
-            },
-        )
+        // TODO: Fix for each SPI, this is super unsound right now...
+        {
+            use core::mem::MaybeUninit;
+
+            static mut WAKER: MaybeUninit<WakerConsumer<'static>> = MaybeUninit::uninit();
+
+            #[export_name = "SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0"]
+            pub unsafe extern "C" fn isr() {
+                let spi = unsafe { &*SPIM0::ptr() };
+                spi.intenclr.write(|w| w.end().set_bit());
+
+                defmt::trace!("    spim_interrupt");
+
+                // Wake all wakers on interrupt.
+                if let Some(waker) = WAKER.assume_init_mut().dequeue() {
+                    defmt::trace!("    spim_interrupt: Waking a waker");
+                    waker.wake();
+                }
+            }
+
+            unsafe { WAKER = MaybeUninit::new(r) };
+
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
+
+            unsafe {
+                cortex_m::peripheral::NVIC::unmask(
+                    nrf52832_hal::pac::interrupt::SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0,
+                )
+            };
+        }
+
+        Handle {
+            send_waker: w,
+            state: SpiOrTransfer::Spi(spi),
+        }
     }
 }
 
