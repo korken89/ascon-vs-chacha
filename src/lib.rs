@@ -1,9 +1,11 @@
 #![no_std]
+#![feature(generic_associated_types)]
 
 use defmt_rtt as _; // global logger
 pub use nrf52832_hal as hal; // memory layout
 
 use panic_probe as _;
+// use panic_reset as _;
 
 pub mod async_spi;
 pub mod bsp;

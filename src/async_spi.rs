@@ -8,6 +8,9 @@ use core::{
     pin::Pin,
     task::{Context, Poll, Waker},
 };
+use embedded_hal_async::spi::{
+    Error, ErrorKind, ErrorType, SpiBus, SpiBusFlush, SpiBusRead, SpiBusWrite,
+};
 use nrf52832_hal::spim::{Instance, SpimEvent};
 
 pub type WakerQueue = ssq::SingleSlotQueue<Waker>;
@@ -104,12 +107,67 @@ pub struct Handle<T: Instance> {
 
 impl<T: Instance> Handle<T> {
     /// Perform an SPI transfer.
-    pub fn transfer<'s>(&'s mut self, buf: &'s mut [u8]) -> TransferFuture<'s, T> {
+    fn transfer<'s>(&'s mut self, buf: &'s mut [u8]) -> TransferFuture<'s, T> {
         defmt::trace!("    Handle: Creating TransferFuture...");
         TransferFuture {
             buf: unsafe { DmaSlice::from_slice(buf) },
             aspi: self,
         }
+    }
+}
+
+impl<T: Instance> SpiBus for Handle<T> {
+    type TransferFuture<'a> = TransferFuture<'a, T> where T: 'a;
+
+    fn transfer<'a>(
+        &'a mut self,
+        _read: &'a mut [u8],
+        _write: &'a [u8],
+    ) -> Self::TransferFuture<'a> {
+        unimplemented!()
+    }
+
+    type TransferInPlaceFuture<'a> = TransferFuture<'a, T> where T: 'a;
+
+    fn transfer_in_place<'a>(&'a mut self, words: &'a mut [u8]) -> Self::TransferInPlaceFuture<'a> {
+        self.transfer(words)
+    }
+}
+
+impl<T: Instance> SpiBusRead for Handle<T> {
+    type ReadFuture<'a> = TransferFuture<'a, T> where T: 'a;
+
+    fn read<'a>(&'a mut self, _words: &'a mut [u8]) -> Self::ReadFuture<'a> {
+        unimplemented!()
+    }
+}
+
+impl<T: Instance> SpiBusWrite for Handle<T> {
+    type WriteFuture<'a> = TransferFuture<'a, T> where T: 'a;
+
+    fn write<'a>(&'a mut self, _words: &'a [u8]) -> Self::WriteFuture<'a> {
+        unimplemented!()
+    }
+}
+
+impl<T: Instance> SpiBusFlush for Handle<T> {
+    type FlushFuture<'a> = TransferFuture<'a, T> where T: 'a;
+
+    fn flush<'a>(&'a mut self) -> Self::FlushFuture<'a> {
+        unimplemented!()
+    }
+}
+
+impl<T: Instance> ErrorType for Handle<T> {
+    type Error = SpiError;
+}
+
+#[derive(Debug)]
+pub struct SpiError {}
+
+impl Error for SpiError {
+    fn kind(&self) -> ErrorKind {
+        unimplemented!()
     }
 }
 
@@ -137,11 +195,6 @@ impl DmaSlice {
             len: buf.len(),
         }
     }
-
-    /// Take a DmaSlice for `async` usage and give back the underlying buffer
-    pub fn to_slice<'a>(self) -> &'a mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
 }
 
 unsafe impl embedded_dma::WriteBuffer for DmaSlice {
@@ -159,7 +212,7 @@ pub struct TransferFuture<'a, T: Instance> {
 }
 
 impl<'a, T: Instance> Future for TransferFuture<'a, T> {
-    type Output = &'a mut [u8];
+    type Output = Result<(), SpiError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let s = unsafe { self.get_unchecked_mut() };
@@ -186,12 +239,12 @@ impl<'a, T: Instance> Future for TransferFuture<'a, T> {
             SpiOrTransfer::Transfer(transfer) => {
                 if transfer.is_done() {
                     // Get the SPI and buffer back
-                    let (buf, spi) = transfer.wait();
+                    let (_buf, spi) = transfer.wait();
                     s.aspi.state = SpiOrTransfer::Spi(spi);
 
                     defmt::trace!("    TransferFuture: Transfer done!");
 
-                    return Poll::Ready(buf.to_slice::<'a>());
+                    return Poll::Ready(Ok(()));
                 }
 
                 defmt::trace!("    TransferFuture: Transfer not done...");
