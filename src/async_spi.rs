@@ -30,19 +30,6 @@ enum SpiOrTransfer<T: Instance> {
     Transfer(DmaTransfer<T, DmaSlice>),
 }
 
-// impl<T: Instance> Drop for SpiOrTransfer<T> {
-//     fn drop(&mut self) {
-//         match self {
-//             SpiOrTransfer::Transfer(_transfer) => {
-//                 panic!("ops, this is not implemented");
-//                 // The HAL does not support aborting a transfer yet, need adding
-//                 // transfer.abort();
-//             }
-//             _ => {}
-//         }
-//     }
-// }
-
 unsafe impl<T: Instance> Send for SpiOrTransfer<T> {}
 
 /// Storage for the queue to the async SPI's wakers, place this in 'static storage.
@@ -237,6 +224,25 @@ unsafe impl embedded_dma::WriteBuffer for DmaSlice {
 pub struct TransferFuture<'a, T: Instance> {
     buf: DmaSlice,
     aspi: &'a mut Handle<T>,
+}
+
+impl<'a, T: Instance> Drop for TransferFuture<'a, T> {
+    fn drop(&mut self) {
+        let state = core::mem::replace(&mut s.aspi.state, SpiOrTransfer::Intermediate);
+        match state {
+            SpiOrTransfer::Transfer(transfer) => {
+                // The HAL does not support aborting a transfer yet, need adding
+                // transfer.abort();
+                let (_buf, spi) = transfer.wait();
+                self.aspi.state = SpiOrTransfer::Spi(spi);
+
+                panic!("ops, this is not implemented");
+            }
+            state_old => {
+                self.aspi.state = state_old;
+            }
+        }
+    }
 }
 
 impl<'a, T: Instance> Future for TransferFuture<'a, T> {
