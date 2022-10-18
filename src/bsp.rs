@@ -9,6 +9,7 @@ use crate::{
     },
     rtc_monotonic::MonoRtc,
 };
+use systick_monotonic::Systick;
 
 pub struct Dw1000 {
     pub cs: Pin<Output<PushPull>>,
@@ -18,10 +19,10 @@ pub struct Dw1000 {
 
 #[inline(always)]
 pub fn init(
-    _c: cortex_m::Peripherals,
+    c: cortex_m::Peripherals,
     p: pac::Peripherals,
     aspi_storage: &'static mut async_spi::Storage,
-) -> (MonoRtc<RTC0>, Dw1000, async_spi::Handle<SPIM0>) {
+) -> (Systick<1_000>, Dw1000, async_spi::Handle<SPIM0>) {
     let _clocks = Clocks::new(p.CLOCK)
         .enable_ext_hfosc()
         .set_lfclk_src_external(LfOscConfiguration::NoExternalNoBypass)
@@ -86,5 +87,9 @@ pub fn init(
         .hi_to_lo()
         .enable_interrupt();
 
-    (MonoRtc::new(p.RTC0), Dw1000 { cs, rst, gpiote }, handle)
+    (
+        Systick::new(c.SYST, 64_000_000),
+        Dw1000 { cs, rst, gpiote },
+        handle,
+    )
 }
