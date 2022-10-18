@@ -1,5 +1,6 @@
 #![no_std]
-#![feature(generic_associated_types)]
+#![feature(type_alias_impl_trait)]
+#![feature(async_fn_in_trait)]
 
 use defmt_rtt as _; // global logger
 pub use nrf52832_hal as hal; // memory layout
@@ -9,6 +10,7 @@ use panic_probe as _;
 
 pub mod async_spi;
 pub mod bsp;
+pub mod fair_share;
 pub mod rtc_monotonic;
 pub mod ssq;
 pub mod timer_monotonic;

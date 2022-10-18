@@ -1,7 +1,7 @@
 #![no_main]
 #![no_std]
 #![feature(type_alias_impl_trait)]
-#![feature(generic_associated_types)]
+#![feature(async_fn_in_trait)]
 
 use dwm1001_async as _; // global logger + panicking-behavior + memory layout
 

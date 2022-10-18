@@ -228,7 +228,7 @@ pub struct TransferFuture<'a, T: Instance> {
 
 impl<'a, T: Instance> Drop for TransferFuture<'a, T> {
     fn drop(&mut self) {
-        let state = core::mem::replace(&mut s.aspi.state, SpiOrTransfer::Intermediate);
+        let state = core::mem::replace(&mut self.aspi.state, SpiOrTransfer::Intermediate);
         match state {
             SpiOrTransfer::Transfer(transfer) => {
                 // The HAL does not support aborting a transfer yet, need adding
