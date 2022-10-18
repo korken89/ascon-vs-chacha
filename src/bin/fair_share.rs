@@ -60,6 +60,7 @@ mod app {
 
         monotonics::delay(5000.millis()).await;
 
+        defmt::info!("    task1: trying to take access again");
         let mut access = cx.shared.fs.access().await;
         defmt::info!("    task1: got access");
         monotonics::delay(1000.millis()).await;
